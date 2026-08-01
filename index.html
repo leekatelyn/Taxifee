@@ -3,96 +3,60 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>的士費報銷紀錄系統</title>
-  <!-- Tailwind CSS & Tesseract.js (多語言支援) -->
+  <title>的士費報銷紀錄系統 (Drive 相片同步)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <style>
-    #mainContent { display: none; }
-  </style>
+  <style> #mainContent { display: none; } </style>
 </head>
 <body class="bg-gray-100 text-gray-800 p-4 min-h-screen">
 
-  <!-- 密碼輸入解鎖介面 -->
+  <!-- 密碼輸入解鎖 -->
   <div id="passwordAuth" class="max-w-md mx-auto mt-20 bg-white p-6 rounded-xl shadow-md text-center">
     <h2 class="text-xl font-bold mb-4 text-gray-800">🔒 受保護的系統</h2>
     <p class="text-sm text-gray-600 mb-4">請輸入密碼以存取單據資料：</p>
-    <input type="password" id="passInput" placeholder="請輸入密碼" class="border p-2 rounded w-full mb-4 text-center text-lg">
-    <button onclick="checkPassword()" class="bg-blue-600 text-white px-6 py-2 rounded-lg font-semibold w-full hover:bg-blue-700">
-      解鎖系統
-    </button>
+    <input type="password" id="passInput" placeholder="請輸入密碼" class="border p-2 rounded w-full mb-4 text-center text-lg" onkeyup="if(event.key==='Enter') checkPassword()">
+    <button onclick="checkPassword()" class="bg-blue-600 text-white px-6 py-2 rounded-lg font-semibold w-full hover:bg-blue-700">解鎖系統</button>
     <p id="passError" class="text-red-500 text-sm mt-2 hidden">❌ 密碼不正確，請重試！</p>
   </div>
 
-  <!-- 主要網頁內容 -->
+  <!-- 主要內容區 -->
   <div id="mainContent" class="max-w-2xl mx-auto bg-white p-6 rounded-xl shadow-md">
     <div class="flex justify-between items-center mb-4">
       <h1 class="text-2xl font-bold text-blue-600">🚕 的士費報銷紀錄</h1>
       <div class="flex items-center space-x-2">
-        <button onclick="syncDataOnline()" class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded font-medium hover:bg-green-200">🔄 手動同步</button>
+        <button onclick="fetchDriveData()" class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded font-medium hover:bg-green-200">🔄 實時同步</button>
         <button onclick="lockSystem()" class="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">🔒 重新上鎖</button>
       </div>
     </div>
     
-    <!-- 1. 上載與 OCR 區域 -->
     <div class="border-2 border-dashed border-blue-300 p-6 rounded-lg text-center bg-blue-50 mb-6">
       <input type="file" id="fileInput" multiple accept="image/*" class="hidden" onchange="handleFiles(this.files)">
       <label for="fileInput" class="bg-blue-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-blue-700 font-semibold inline-block shadow">
-        📷 選擇單據相片 / 即時影相 (可多選)
+        📷 選擇單據相片 / 即時影相 (自動入 Drive)
       </label>
       <div id="status" class="mt-3 text-sm font-medium text-gray-600"></div>
     </div>
 
-    <!-- 2. 每月進度條與統計 -->
     <div id="statsSection" class="mb-6 space-y-4"></div>
 
-    <!-- 3. 單據列表 -->
     <div class="flex justify-between items-center mb-2">
       <h2 class="text-lg font-bold">單據明細列表</h2>
-      <span id="syncStatus" class="text-xs text-gray-400">雲端同步中...</span>
+      <span id="syncStatus" class="text-xs text-gray-400">連線至 Google Drive...</span>
     </div>
     <div id="receiptsList" class="space-y-3">
-      <p class="text-gray-400 text-center py-4">載入中 / 暫無資料...</p>
-    </div>
-  </div>
-
-  <!-- 編輯彈窗 (Modal) -->
-  <div id="editModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center p-4 z-50">
-    <div class="bg-white p-6 rounded-xl w-full max-w-md shadow-2xl">
-      <h3 class="text-lg font-bold mb-4">✏️ 編輯單據資料</h3>
-      <input type="hidden" id="editId">
-      <div class="space-y-3">
-        <div>
-          <label class="block text-sm font-medium text-gray-700">日期</label>
-          <input type="date" id="editDate" class="w-full border rounded p-2 mt-1">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700">金額 (HKD)</label>
-          <input type="number" step="0.1" id="editAmount" class="w-full border rounded p-2 mt-1">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700">備註/行程</label>
-          <input type="text" id="editNote" class="w-full border rounded p-2 mt-1">
-        </div>
-      </div>
-      <div class="mt-5 flex justify-end space-x-2">
-        <button onclick="closeModal()" class="px-4 py-2 bg-gray-200 rounded">取消</button>
-        <button onclick="saveEdit()" class="px-4 py-2 bg-blue-600 text-white rounded">儲存</button>
-      </div>
+      <p class="text-gray-400 text-center py-4">載入中...</p>
     </div>
   </div>
 
   <script>
     const SECRET_PASSWORD = "0523";
-    // 免費公開全域雲端資料庫通道 (確保所有打開網站的人都能同步資料)
-    const BIN_ID = "66aba112ad19ca34f891a2b3"; 
-    const API_URL = "https://api.jsonbin.io/v3/b/" + BIN_ID;
+    // ⚠️ 請在此處填入你部署 Apps Script 後獲得的 Web App 網址
+    const GAS_API_URL = "https://script.google.com/macros/s/AKfycbzTnI_ZwWSHhSxNYvigzZF3JEVHeRWdKmO-Oj6LmYOetLX1HpE57iDRFmSN8AmImdUIRA/exec";
 
     let localData = [];
 
     function checkPassword() {
-      const inputPass = document.getElementById('passInput').value;
-      if (inputPass === SECRET_PASSWORD) {
+      if (document.getElementById('passInput').value === SECRET_PASSWORD) {
         localStorage.setItem('taxi_auth', 'true');
         showMainContent();
       } else {
@@ -103,7 +67,7 @@
     function showMainContent() {
       document.getElementById('passwordAuth').style.display = 'none';
       document.getElementById('mainContent').style.display = 'block';
-      syncDataOnline();
+      fetchDriveData();
     }
 
     function lockSystem() {
@@ -112,139 +76,87 @@
     }
 
     window.onload = function() {
-      if (localStorage.getItem('taxi_auth') === 'true') {
-        showMainContent();
-      }
+      if (localStorage.getItem('taxi_auth') === 'true') showMainContent();
     };
 
-    // 📡 跨裝置雲端資料同步邏輯 (讀取)
-    async function syncDataOnline() {
+    async function fetchDriveData() {
       const syncStatus = document.getElementById('syncStatus');
-      if (syncStatus) syncStatus.innerText = '🔄 正在同步雲端資料...';
+      if (syncStatus) syncStatus.innerText = '🔄 同步 Drive 資料中...';
       try {
-        const res = await fetch(API_URL + '/latest', {
-          headers: { 'X-Master-Key': '$2a$10$8v/WJ1U3Yx3D8s5.uL5n/O9v5N5N5N5N5N5N5N5N' }
-        });
+        const res = await fetch(GAS_API_URL);
         if (res.ok) {
-          const json = await res.json();
-          if (json.record && Array.isArray(json.record)) {
-            localData = json.record;
-            localStorage.setItem('taxi_receipts', JSON.stringify(localData));
-          }
+          localData = await res.json();
+          if (!Array.isArray(localData)) localData = [];
+          if (syncStatus) syncStatus.innerText = '✅ 已同步最新資料';
         }
       } catch (e) {
-        console.warn('雲端同步失敗，使用本地備份:', e);
-        localData = JSON.parse(localStorage.getItem('taxi_receipts') || '[]');
-      }
-      if (syncStatus) syncStatus.innerText = '✅ 雲端已同步';
-      render();
-    }
-
-    // 📡 跨裝置雲端資料同步邏輯 (寫入)
-    async function pushDataOnline() {
-      const syncStatus = document.getElementById('syncStatus');
-      if (syncStatus) syncStatus.innerText = '⏳ 正在儲存至雲端...';
-      localStorage.setItem('taxi_receipts', JSON.stringify(localData));
-      try {
-        await fetch(API_URL, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Master-Key': '$2a$10$8v/WJ1U3Yx3D8s5.uL5n/O9v5N5N5N5N5N5N5N5N'
-          },
-          body: JSON.stringify(localData)
-        });
-        if (syncStatus) syncStatus.innerText = '✅ 已成功儲存至雲端';
-      } catch (e) {
-        if (syncStatus) syncStatus.innerText = '⚠️ 已存於本地 (網絡不穩定)';
+        if (syncStatus) syncStatus.innerText = '⚠️ 同步失敗';
       }
       render();
     }
 
-    // 🔍 智能 OCR 的士單據解析器 (針對日期與金額優化)
     function parseReceiptText(text) {
-      console.log('--- OCR 原始辨識文字 ---', text);
-
-      // 1. 日期提取邏輯 (支援 YYYY-MM-DD, YYYY/MM/DD, DD/MM/YYYY)
-      let dateStr = new Date().toISOString().split('T')[0]; // 預設今日
-      const dateMatch = text.match(/(202[3-9][\/\.\.-]\d{1,2}[\/\.\.-]\d{1,2})|(\d{1,2}[\/\.\.-]\d{1,2}[\/\.\.-]202[3-9])/);
+      let dateStr = new Date().toISOString().split('T')[0];
+      const dateMatch = text.match(/(202[3-9][\/\.-]\d{1,2}[\/\.-]\d{1,2})|(\d{1,2}[\/\.-]\d{1,2}[\/\.-]202[3-9])/);
       if (dateMatch) {
-        let rawDate = dateMatch[0].replace(/[\.\.]/g, '/');
+        let rawDate = dateMatch[0].replace(/[\.]/g, '/');
         try {
           let d = new Date(rawDate);
-          if (!isNaN(d.getTime())) {
-            dateStr = d.toISOString().split('T')[0];
-          }
+          if (!isNaN(d.getTime())) dateStr = d.toISOString().split('T')[0];
         } catch(e){}
       }
 
-      // 2. 金額提取邏輯 (專門捕捉 HK$, Total, 車費, 總額 等關鍵字後面的數字)
       let amount = 0;
-      const lines = text.split('\n');
-      let candidates = [];
-
-      lines.forEach(line => {
-        const cleanLine = line.toUpperCase().replace(/\s+/g, '');
-        // 關鍵行比對
-        if (cleanLine.includes('TOTAL') || cleanLine.includes('HK$') || cleanLine.includes('HKD') || cleanLine.includes('車費') || cleanLine.includes('總金額') || cleanLine.includes('AMOUNT')) {
-          const numMatch = line.match(/\d+(\.\d{1,2})?/g);
-          if (numMatch) {
-            numMatch.forEach(n => candidates.push(parseFloat(n)));
-          }
+      let foundNumbers = [];
+      text.split('\n').forEach(line => {
+        let uppercaseLine = line.toUpperCase();
+        if (uppercaseLine.includes('TOTAL') || uppercaseLine.includes('HK') || uppercaseLine.includes('$') || uppercaseLine.includes('車費') || uppercaseLine.includes('金額')) {
+          let nums = line.match(/\d+(\.\d{1,2})?/g);
+          if (nums) nums.forEach(n => { let val = parseFloat(n); if (val >= 10 && val <= 1000) foundNumbers.push(val); });
         }
       });
 
-      // 如果找不到關鍵行，全文字搜尋所有合理金額 (一般香港的士車費 $27 - $500 之間)
-      if (candidates.length === 0) {
-        const allNums = text.match(/\b\d{2,3}(\.\d{1,2})?\b/g);
-        if (allNums) {
-          allNums.forEach(n => {
-            let val = parseFloat(n);
-            if (val >= 20 && val <= 800) candidates.push(val);
-          });
-        }
+      if (foundNumbers.length === 0) {
+        let allNums = text.match(/\b\d{2,3}(\.\d{1,2})?\b/g);
+        if (allNums) allNums.forEach(n => { let val = parseFloat(n); if (val >= 24 && val <= 800) foundNumbers.push(val); });
       }
 
-      if (candidates.length > 0) {
-        // 取符合邏輯的最大合理值作為車費金額
-        amount = Math.max(...candidates);
-      }
-
+      if (foundNumbers.length > 0) amount = Math.max(...foundNumbers);
       return { date: dateStr, amount: amount };
     }
 
-    // 🖼️ 處理圖片上載與 OCR
     async function handleFiles(files) {
       const statusDiv = document.getElementById('status');
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        statusDiv.innerText = `⏳ 正在分析第 ${i + 1}/${files.length} 張單據相片 (OCR 辨識中)...`;
-        
+        statusDiv.innerText = `⏳ 分析中並上傳第 ${i + 1}/${files.length} 張相片至 Google Drive...`;
         const imageBase64 = await convertToBase64AndCompress(file);
         
-        // 使用 Tesseract.js 高級模式 (載入英文與繁體中文)
-        const worker = await Tesseract.createWorker(['eng', 'chi_tra']);
-        const ret = await worker.recognize(imageBase64);
-        await worker.terminate();
-
-        const parsed = parseReceiptText(ret.data.text);
+        let parsed = { date: new Date().toISOString().split('T')[0], amount: 0 };
+        try {
+          const worker = await Tesseract.createWorker('eng');
+          const ret = await worker.recognize(imageBase64);
+          await worker.terminate();
+          parsed = parseReceiptText(ret.data.text);
+        } catch(e){}
 
         const newItem = {
           id: Date.now().toString() + Math.random().toString(36).substr(2, 4),
           date: parsed.date,
           amount: parsed.amount,
           image: imageBase64,
-          note: parsed.amount === 0 ? '需手動確認金額' : '自動辨識',
-          month: parsed.date.substring(0, 7)
+          note: parsed.amount === 0 ? '需手動確認金額' : '自動辨識'
         };
 
-        localData.unshift(newItem);
+        await fetch(GAS_API_URL, {
+          method: 'POST',
+          body: JSON.stringify(newItem)
+        });
       }
-      statusDiv.innerText = '✅ 單據解析完成！請核對金額與日期。';
-      await pushDataOnline();
+      statusDiv.innerText = '✅ 相片已成功儲存至 Google Drive！';
+      await fetchDriveData();
     }
 
-    // 壓縮圖片 Base64 (防止資料過大)
     function convertToBase64AndCompress(file) {
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -252,21 +164,12 @@
           const img = new Image();
           img.onload = function() {
             const canvas = document.createElement('canvas');
-            let width = img.width;
-            let height = img.height;
-            const max = 800; // 縮放至最大 800px 以加快 OCR 速度與節省雲端空間
-            if (width > height && width > max) {
-              height = Math.round((height * max) / width);
-              width = max;
-            } else if (height > max) {
-              width = Math.round((width * max) / height);
-              height = max;
-            }
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, width, height);
-            resolve(canvas.toDataURL('image/jpeg', 0.7));
+            let width = img.width, height = img.height, max = 700;
+            if (width > height && width > max) { height = Math.round((height * max) / width); width = max; }
+            else if (height > max) { width = Math.round((width * max) / height); height = max; }
+            canvas.width = width; canvas.height = height;
+            canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.6));
           };
           img.src = e.target.result;
         };
@@ -274,22 +177,19 @@
       });
     }
 
-    // 計算每月 $500 額度與自動標示剔走
     function render() {
       const receiptsList = document.getElementById('receiptsList');
       const statsSection = document.getElementById('statsSection');
-      
       localData.sort((a, b) => new Date(b.date) - new Date(a.date));
 
       const monthlyTotals = {};
-      localData.forEach(item => {
-        const month = item.date.substring(0, 7);
-        if (!monthlyTotals[month]) monthlyTotals[month] = 0;
+      localData.forEach(item => { 
+        if(item.date) monthlyTotals[String(item.date).substring(0, 7)] = 0; 
       });
 
       statsSection.innerHTML = Object.keys(monthlyTotals).map(month => {
         let total = 0;
-        localData.filter(i => i.date.startsWith(month)).reverse().forEach(i => total += Number(i.amount));
+        localData.filter(i => String(i.date).startsWith(month)).reverse().forEach(i => total += Number(i.amount));
         const isOver = total > 500;
         return `
           <div class="bg-gray-50 p-4 rounded-lg border">
@@ -306,17 +206,16 @@
       }).join('');
 
       let runningTotals = {};
-      const renderedList = localData.map(item => {
-        const month = item.date.substring(0, 7);
+      receiptsList.innerHTML = localData.map(item => {
+        const month = String(item.date).substring(0, 7);
         if (!runningTotals[month]) runningTotals[month] = 0;
-        
         runningTotals[month] += Number(item.amount);
         const isQualified = runningTotals[month] <= 500;
 
         return `
           <div class="flex items-center justify-between p-3 bg-white border rounded-lg shadow-sm ${!isQualified ? 'opacity-60 bg-red-50' : ''}">
             <div class="flex items-center space-x-3">
-              <img src="${item.image}" class="w-12 h-12 object-cover rounded border cursor-pointer" onclick="window.open('${item.image}')" title="點擊放大">
+              <img src="${item.image}" class="w-12 h-12 object-cover rounded border cursor-pointer" onclick="window.open('${item.image}')" title="點擊放大檢視 Drive 原始相片">
               <div>
                 <div class="font-bold text-gray-800">HK$ ${item.amount}</div>
                 <div class="text-xs text-gray-500">${item.date} | ${item.note || ''}</div>
@@ -325,54 +224,9 @@
                 </span>
               </div>
             </div>
-            <div class="space-x-1">
-              <button onclick="openEdit('${item.id}')" class="text-sm bg-gray-100 p-1.5 rounded hover:bg-gray-200">✏️</button>
-              <button onclick="deleteItem('${item.id}')" class="text-sm bg-red-100 text-red-600 p-1.5 rounded hover:bg-red-200">🗑️</button>
-            </div>
           </div>
         `;
-      }).join('');
-
-      receiptsList.innerHTML = renderedList || '<p class="text-gray-400 text-center py-4">暫無單據紀錄</p>';
-    }
-
-    function openEdit(id) {
-      const item = localData.find(i => i.id === id);
-      if (!item) return;
-      document.getElementById('editId').value = item.id;
-      document.getElementById('editDate').value = item.date;
-      document.getElementById('editAmount').value = item.amount;
-      document.getElementById('editNote').value = item.note || '';
-      document.getElementById('editModal').classList.remove('hidden');
-      document.getElementById('editModal').classList.add('flex');
-    }
-
-    function closeModal() {
-      document.getElementById('editModal').classList.add('hidden');
-      document.getElementById('editModal').classList.remove('flex');
-    }
-
-    async function saveEdit() {
-      const id = document.getElementById('editId').value;
-      const date = document.getElementById('editDate').value;
-      const amount = parseFloat(document.getElementById('editAmount').value) || 0;
-      const note = document.getElementById('editNote').value;
-
-      const item = localData.find(i => i.id === id);
-      if (item) {
-        item.date = date;
-        item.amount = amount;
-        item.note = note;
-        item.month = date.substring(0, 7);
-      }
-      closeModal();
-      await pushDataOnline();
-    }
-
-    async function deleteItem(id) {
-      if (!confirm('確定要刪除這張單據嗎？')) return;
-      localData = localData.filter(i => i.id !== id);
-      await pushDataOnline();
+      }).join('') || '<p class="text-gray-400 text-center py-4">暫無單據紀錄</p>';
     }
   </script>
 </body>
