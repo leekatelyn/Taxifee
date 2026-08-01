@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>的士費報銷紀錄系統 (Drive 相片同步)</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Tesseract.js OCR 庫 -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <style> #mainContent { display: none; } </style>
 </head>
@@ -50,7 +51,7 @@
 
   <script>
     const SECRET_PASSWORD = "0523";
-    // ⚠️ 請填入你從 Apps Script 獲得的 Web App 網址
+    // ⚠️ 你的 Google Apps Script Web App 網址
     const GAS_API_URL = "https://script.google.com/macros/s/AKfycbzTnI_ZwWSHhSxNYvigzZF3JEVHeRWdKmO-Oj6LmYOetLX1HpE57iDRFmSN8AmImdUIRA/exec";
 
     let localData = [];
@@ -79,7 +80,7 @@
       if (localStorage.getItem('taxi_auth') === 'true') showMainContent();
     };
 
-    // 📡 使用 JSONP 完美避開跨網域限制從 Drive 讀取資料
+    // 📡 使用 JSONP 從 Drive 讀取資料
     function fetchDriveData() {
       const syncStatus = document.getElementById('syncStatus');
       if (syncStatus) syncStatus.innerText = '🔄 同步 Drive 資料中...';
@@ -90,7 +91,7 @@
         if (syncStatus) syncStatus.innerText = '✅ 已成功同步 Google Drive';
         render();
         delete window[callbackName];
-        document.body.removeChild(script);
+        if (script.parentNode) script.parentNode.removeChild(script);
       };
 
       const script = document.createElement('script');
@@ -141,7 +142,8 @@
         
         let parsed = { date: new Date().toISOString().split('T')[0], amount: 0 };
         try {
-          const worker = await Tesseract.createWorker('eng');
+          // [FIX 1] 改為中英文雙語辨識 (chi_tra+eng)，提升香港單據中文「車費/金額」辨識率
+          const worker = await Tesseract.createWorker(['chi_tra', 'eng']);
           const ret = await worker.recognize(imageBase64);
           await worker.terminate();
           parsed = parseReceiptText(ret.data.text);
@@ -163,7 +165,7 @@
         });
       }
       statusDiv.innerText = '✅ 相片已成功儲存至 Google Drive！';
-      setTimeout(fetchDriveData, 2000); // 上載後 2 秒自動同步
+      setTimeout(fetchDriveData, 2000);
     }
 
     function convertToBase64AndCompress(file) {
@@ -189,48 +191,74 @@
     function render() {
       const receiptsList = document.getElementById('receiptsList');
       const statsSection = document.getElementById('statsSection');
+
+      // [FIX 2] 先按日期「由舊至新（時間順序）」排序，正確依時序累加金額
+      const chronologicalData = [...localData].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      const monthlyRunningTotals = {};
+      const itemStatusMap = {};
+
+      chronologicalData.forEach(item => {
+        const month = String(item.date).substring(0, 7);
+        if (!monthlyRunningTotals[month]) monthlyRunningTotals[month] = 0;
+
+        monthlyRunningTotals[month] += Number(item.amount);
+        
+        // 如果該單據累加後超過 500，標記為超額
+        const isOver = monthlyRunningTotals[month] > 500;
+        itemStatusMap[item.id] = {
+          isOver: isOver,
+          currentTotal: monthlyRunningTotals[month]
+        };
+      });
+
+      // [FIX 3] 列表顯示時，改回按「最新日期在前」排序
       localData.sort((a, b) => new Date(b.date) - new Date(a.date));
 
+      // 繪製月度總額統計卡片
       const monthlyTotals = {};
       localData.forEach(item => { 
-        if(item.date) monthlyTotals[String(item.date).substring(0, 7)] = 0; 
+        if (item.date) monthlyTotals[String(item.date).substring(0, 7)] = 0; 
       });
 
       statsSection.innerHTML = Object.keys(monthlyTotals).map(month => {
         let total = 0;
-        localData.filter(i => String(i.date).startsWith(month)).reverse().forEach(i => total += Number(i.amount));
+        localData.filter(i => String(i.date).startsWith(month)).forEach(i => total += Number(i.amount));
         const isOver = total > 500;
         return `
           <div class="bg-gray-50 p-4 rounded-lg border">
             <div class="flex justify-between font-bold mb-1">
               <span>📅 ${month}</span>
-              <span class="${isOver ? 'text-red-600' : 'text-green-600'}">已用: HK$${total.toFixed(1)} / $500.0</span>
+              <span class="${isOver ? 'text-red-600 font-extrabold' : 'text-green-600'}">本月總計: HK$${total.toFixed(1)} / $500.0</span>
             </div>
             <div class="w-full bg-gray-200 rounded-full h-2.5">
               <div class="h-2.5 rounded-full ${isOver ? 'bg-red-500' : 'bg-blue-600'}" style="width: ${Math.min((total/500)*100, 100)}%"></div>
             </div>
-            ${isOver ? '<p class="text-xs text-red-500 mt-1">⚠️ 累計已超過 HK$500 報銷上限</p>' : ''}
+            ${isOver ? '<p class="text-xs text-red-500 mt-1">⚠️ 本月累計金額已超過 HK$500 報銷上限！</p>' : ''}
           </div>
         `;
       }).join('');
 
-      let runningTotals = {};
+      // [FIX 4] 繪製單據明細列表：超額金額與卡片會以紅色醒目標示
       receiptsList.innerHTML = localData.map(item => {
-        const month = String(item.date).substring(0, 7);
-        if (!runningTotals[month]) runningTotals[month] = 0;
-        runningTotals[month] += Number(item.amount);
-        const isQualified = runningTotals[month] <= 500;
+        const status = itemStatusMap[item.id] || { isOver: false, currentTotal: 0 };
+        const isOver = status.isOver;
 
         return `
-          <div class="flex items-center justify-between p-3 bg-white border rounded-lg shadow-sm ${!isQualified ? 'opacity-60 bg-red-50' : ''}">
+          <div class="flex items-center justify-between p-3 border rounded-lg shadow-sm transition-all ${isOver ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}">
             <div class="flex items-center space-x-3">
-              <img src="${item.image}" class="w-12 h-12 object-cover rounded border cursor-pointer" onclick="window.open('${item.image}')" title="點擊放大檢視 Drive 原始相片">
+              <img src="${item.image}" class="w-12 h-12 object-cover rounded border cursor-pointer hover:opacity-80" onclick="window.open('${item.image}')" title="點擊檢視原始相片">
               <div>
-                <div class="font-bold text-gray-800">HK$ ${item.amount}</div>
+                <div class="font-bold text-lg ${isOver ? 'text-red-600 font-extrabold' : 'text-gray-800'}">
+                  HK$ ${item.amount}
+                </div>
                 <div class="text-xs text-gray-500">${item.date} | ${item.note || ''}</div>
-                <span class="text-xs px-2 py-0.5 rounded ${isQualified ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
-                  ${isQualified ? '✅ $500 額度內' : '❌ 已超出 (自動剔走)'}
-                </span>
+                
+                <div class="mt-1">
+                  <span class="text-xs px-2 py-0.5 rounded font-medium ${isOver ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}">
+                    ${isOver ? '⚠️ 超出 HK$500 上限 (累計: HK$' + status.currentTotal.toFixed(1) + ')' : '✅ 額度內 (累計: HK$' + status.currentTotal.toFixed(1) + ')'}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
