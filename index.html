@@ -50,7 +50,7 @@
 
   <script>
     const SECRET_PASSWORD = "0523";
-    // ⚠️ 請在此處填入你部署 Apps Script 後獲得的 Web App 網址
+    // ⚠️ 請填入你從 Apps Script 獲得的 Web App 網址
     const GAS_API_URL = "https://script.google.com/macros/s/AKfycbzTnI_ZwWSHhSxNYvigzZF3JEVHeRWdKmO-Oj6LmYOetLX1HpE57iDRFmSN8AmImdUIRA/exec";
 
     let localData = [];
@@ -79,20 +79,27 @@
       if (localStorage.getItem('taxi_auth') === 'true') showMainContent();
     };
 
-    async function fetchDriveData() {
+    // 📡 使用 JSONP 完美避開跨網域限制從 Drive 讀取資料
+    function fetchDriveData() {
       const syncStatus = document.getElementById('syncStatus');
       if (syncStatus) syncStatus.innerText = '🔄 同步 Drive 資料中...';
-      try {
-        const res = await fetch(GAS_API_URL);
-        if (res.ok) {
-          localData = await res.json();
-          if (!Array.isArray(localData)) localData = [];
-          if (syncStatus) syncStatus.innerText = '✅ 已同步最新資料';
-        }
-      } catch (e) {
-        if (syncStatus) syncStatus.innerText = '⚠️ 同步失敗';
-      }
-      render();
+      
+      const callbackName = 'jsonpCallback_' + Date.now();
+      window[callbackName] = function(data) {
+        localData = Array.isArray(data) ? data : [];
+        if (syncStatus) syncStatus.innerText = '✅ 已成功同步 Google Drive';
+        render();
+        delete window[callbackName];
+        document.body.removeChild(script);
+      };
+
+      const script = document.createElement('script');
+      script.src = GAS_API_URL + '?callback=' + callbackName;
+      script.onerror = function() {
+        if (syncStatus) syncStatus.innerText = '⚠️ 同步失敗，請檢查網址';
+        delete window[callbackName];
+      };
+      document.body.appendChild(script);
     }
 
     function parseReceiptText(text) {
@@ -150,11 +157,13 @@
 
         await fetch(GAS_API_URL, {
           method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify(newItem)
         });
       }
       statusDiv.innerText = '✅ 相片已成功儲存至 Google Drive！';
-      await fetchDriveData();
+      setTimeout(fetchDriveData, 2000); // 上載後 2 秒自動同步
     }
 
     function convertToBase64AndCompress(file) {
